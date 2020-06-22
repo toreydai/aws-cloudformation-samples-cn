@@ -1,0 +1,26 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: A sample template of nested stack
+Parameters:
+  SSHKey:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+  
+Resources:
+  myStack:
+    Type: AWS::CloudFormation::Stack
+    Properties:
+      TemplateURL: https://s3.cn-north-1.amazonaws.com.cn/cloudformation-templates-cn-north-1/LAMP_Single_Instance.template
+      Parameters:
+        KeyName: !Ref SSHKey
+        DBName: "dbinstance"
+        DBUser: "dbuser"
+        DBPassword: "password"
+        DBRootPassword: "rootpass"
+        InstanceType: t2.micro
+        SSHLocation: "0.0.0.0/0"
+
+Outputs:
+  StackRef:
+    Value: !Ref myStack
+  OutputFromNestedStack:
+    Value: !GetAtt myStack.Outputs.WebsiteURL

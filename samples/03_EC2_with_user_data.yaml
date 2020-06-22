@@ -1,0 +1,39 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: A sample template with one EC2 instance and user data
+Parameters:
+  SSHKey:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of an existing EC2 KeyPair to enable SSH access to the instance
+
+Resources:
+  MyInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      AvailabilityZone: cn-northwest-1a
+      ImageId: ami-0e21949a0d60b93e2
+      InstanceType: t2.micro
+      KeyName: !Ref SSHKey
+      SecurityGroups:
+        - !Ref SSHSecurityGroup
+      UserData: 
+        Fn::Base64: |
+          #!/bin/bash -xe
+          yum update -y
+          yum install -y httpd
+          systemctl start httpd
+          systemctl enable httpd
+          echo "Hello World from user data" > /var/www/html/index.html
+
+  SSHSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: SSH and HTTP
+      SecurityGroupIngress:
+      - CidrIp: 0.0.0.0/0
+        FromPort: 22
+        IpProtocol: tcp
+        ToPort: 22
+      - CidrIp: 0.0.0.0/0
+        FromPort: 80
+        IpProtocol: tcp
+        ToPort: 80
