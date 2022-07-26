@@ -1,0 +1,645 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: >-
+  A sample template that create vpc with public subnet and private subnet,and a master
+  EC2 instance in public subnet,an suto scaling group in private subnet.
+Parameters:
+  AccessFrom:
+    Description: Lockdown SSH/HTTP access (default can be accessed from anywhere)
+    Type: String
+    MinLength: '9'
+    MaxLength: '18'
+    Default: 0.0.0.0/0
+    AllowedPattern: '(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})/(\d{1,2})'
+    ConstraintDescription: must be a valid CIDR range of the form x.x.x.x/x.
+  AvailabilityZone:
+    Description: The Availability Zone in which you want to create your subnet(s)
+    Type: 'AWS::EC2::AvailabilityZone::Name'
+  VpcCidrBlock:
+    Description: The CIDR of the VPC
+    AllowedPattern: '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/(1[6-9]|2[0-9]|3[0-2])$'
+    Type: String 
+  MasterSubnetCIDR:
+    Description: The CIDR of the Private Subnet
+    AllowedPattern: '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/(1[6-9]|2[0-9]|3[0-2])$'
+    Type: String
+  ComputeSubnetCIDR:
+    Description: The CIDR of the Public Subnet
+    AllowedPattern: '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/(1[6-9]|2[0-9]|3[0-2])$'
+    Type: String
+  MinSize:
+    Description: >-
+      Initial number of compute EC2 instances / vCpus to launch within the
+      cluster.
+    Type: Number
+  DesiredSize:
+    Description: >-
+      Desired number of compute EC2 instances / vCpus to launch within the
+      cluster.
+    Type: Number
+  MaxSize:
+    Description: >-
+      Maximum number of compute EC2 instances / vCpus to launch within the
+      cluster.
+    Type: Number
+  MasterInstanceType:
+    Description: MasterServer EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+      - m5.large
+      - m5.xlarge
+      - m5.2xlarge
+      - m5.4xlarge
+      - c5.large
+      - c5.xlarge
+      - c5.2xlarge
+      - c5.4xlarge
+    ConstraintDescription: 'Must be a valid EC2 instance type, with support for HVM.'
+  ComputeInstanceType:
+    Description: ComputeFleet EC2 instance type
+    Type: String
+    Default: t2.micro
+    AllowedValues:
+      - t2.micro
+      - t2.small
+      - t2.medium
+      - t2.large
+      - m5.large
+      - m5.xlarge
+      - m5.2xlarge
+      - m5.4xlarge
+      - c5.large
+      - c5.xlarge
+      - c5.2xlarge
+      - c5.4xlarge
+    ConstraintDescription: 'Must be a valid EC2 instance type, with support for HVM.'
+  KeyName:
+    Description: >-
+      Name of an existing EC2 KeyPair to enable SSH access to the instances
+      using the default cluster user.
+    Type: 'AWS::EC2::KeyPair::KeyName'
+  BaseOS:
+    Description: Base OS type for cluster AMI
+    Type: String
+    Default: alinux
+    ConstraintDescription: must be a supported base OS
+    AllowedValues:
+      - centos6
+      - centos7
+      - alinux
+      - ubuntu1604
+      - ubuntu1804
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default: Network - Basic Settings
+        Parameters:
+          - AccessFrom
+          - AvailabilityZone
+          - VpcCidrBlock
+          - MasterSubnetCIDR
+          - ComputeSubnetCIDR
+      - Label:
+          default: Cluster - Basic Setting
+        Parameters:
+          - MinSize
+          - DesiredSize
+          - MaxSize
+          - MasterInstanceType
+          - ComputeInstanceType
+          - KeyName
+          - BaseOS
+    ParameterLabels:
+      AccessFrom:
+        default: access_from
+      AvailabilityZone:
+        default: availability_zone
+      VpcCidrBlock:
+        default: vpc_cidr_block
+      MasterSubnetCIDR:
+        default: master_subnet_cidr
+      ComputeSubnetCIDR:
+        default: compute_subnet_cidr
+      MinSize:
+        default: min_size
+      DesiredSize:
+        default: desired_size
+      MaxSize:
+        default: max_size
+      MasterInstanceType:
+        default: master_instance_type
+      ComputeInstanceType:
+        default: compute_instance_type
+      KeyName:
+        default: key_name
+      BaseOS:
+        default: base_os
+Mappings:
+  AWSRegionOS2AMI:
+    cn-north-1:
+      alinux: ami-02d8c4f46ddaa963f
+      ubuntu1604: ami-0be283f7ce8800c88
+      ubuntu1804: ami-048c92cbf8cf39045
+    cn-northwest-1:
+      alinux: ami-0ab8a54fbf54abb1f
+      ubuntu1604: ami-09e41a30a1b8ddf12
+      ubuntu1804: ami-0a46aab69758b32c7
+  OSFeatures:
+    centos6:
+      User: centos
+      RootDevice: /dev/sda1
+    centos7:
+      User: centos
+      RootDevice: /dev/sda1
+    alinux:
+      User: ec2-user
+      RootDevice: /dev/xvda
+    ubuntu1604:
+      User: ubuntu
+      RootDevice: /dev/sda1
+    ubuntu1804:
+      User: ubuntu
+      RootDevice: /dev/sda1
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      CidrBlock: !Ref VpcCidrBlock
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-VPC'
+        - Key: Stack
+          Value: !Ref 'AWS::StackId'
+  DefaultRouteDependsOnPublic:
+    Type: 'AWS::EC2::Route'
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTablePublic  
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: ClusterIG
+        - Key: Stack
+          Value: !Ref 'AWS::StackId'
+  NatEIPPublic:
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: vpc
+  NatGatewayPublic:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt 
+        - NatEIPPublic
+        - AllocationId
+      SubnetId: !Ref PublicSubnet
+  NatRoutePrivate:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayPublic
+      RouteTableId: !Ref RouteTablePrivate
+  PrivateSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: !Ref ComputeSubnetCIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: ClusterPrivateSubnet
+        - Key: Stack
+          Value: !Ref 'AWS::StackId'
+      VpcId: !Ref VPC
+  PublicSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: !Ref MasterSubnetCIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: ClusterPublicSubnet
+        - Key: Stack
+          Value: !Ref 'AWS::StackId'
+      VpcId: !Ref VPC
+  RouteAssociationPrivate:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      SubnetId: !Ref PrivateSubnet 
+  RouteAssociationPublic:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      SubnetId: !Ref PublicSubnet
+  RouteTablePrivate:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: ClusterRouteTablePrivate
+        - Key: Stack
+          Value: !Ref 'AWS::StackId'
+      VpcId: !Ref VPC
+  RouteTablePublic:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: ClusterRouteTablePublic
+        - Key: Stack
+          Value: !Ref 'AWS::StackId'
+      VpcId: !Ref VPC
+  VPCGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+  ClusterSecurityGroup:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Cluster Security Group
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '22'
+          ToPort: '22'
+          CidrIp: !Ref AccessFrom
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ClusterSecurityGroup'
+  ClusterAdditionalSG:
+    Type: 'AWS::EC2::SecurityGroup'
+    Properties:
+      GroupDescription: Security Group for Cluster instances
+      VpcId: !Ref VPC
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: '80'
+          ToPort: '80'
+          CidrIp: !Ref AccessFrom
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-ClusterAdditionalSG'
+  ClusterSecurityGroupIngressAllTraffic:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      IpProtocol: '-1'
+      FromPort: '-1'
+      ToPort: '-1'
+      SourceSecurityGroupId: !Ref ClusterSecurityGroup
+      GroupId: !Ref ClusterSecurityGroup
+  ClusterAdditionalSGIngressAllTraffic:
+    Type: 'AWS::EC2::SecurityGroupIngress'
+    Properties:
+      IpProtocol: '-1'
+      FromPort: '-1'
+      ToPort: '-1'
+      GroupId: !Ref ClusterAdditionalSG
+      SourceSecurityGroupId: !Ref ClusterAdditionalSG
+  ClusterRole:
+    Type: 'AWS::IAM::Role'
+    Properties:
+      Path: /
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com.cn
+            Action:
+              - 'sts:AssumeRole'
+  ClusterInstancePolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      Roles:
+        - !Ref ClusterRole
+      PolicyName: ClusterInstancePolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: EC2
+            Effect: Allow
+            Resource: '*'
+            Action:
+              - 'ec2:DescribeVolumes'
+              - 'ec2:AttachVolume'
+              - 'ec2:DescribeInstanceAttribute'
+              - 'ec2:DescribeInstanceStatus'
+              - 'ec2:DescribeInstances'
+          - Sid: Autoscaling
+            Effect: Allow
+            Resource: '*'
+            Action:
+              - 'autoscaling:DescribeAutoScalingGroups'
+              - 'autoscaling:TerminateInstanceInAutoScalingGroup'
+              - 'autoscaling:SetDesiredCapacity'
+              - 'autoscaling:DescribeTags'
+              - 'autoScaling:UpdateAutoScalingGroup'
+          - Sid: CloudWatch
+            Effect: Allow
+            Resource: '*'
+            Action:
+              - 'cloudwatch:PutMetricData'
+          - Resource:
+              - !Sub 'arn:aws-cn:s3:::${AWS::Region}-Cluster/*'
+            Action:
+              - 's3:GetObject'
+            Sid: S3GetObj
+            Effect: Allow
+          - Resource:
+              - !Sub >-
+                arn:aws-cn:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/Cluster-*
+            Action:
+              - 'cloudformation:DescribeStacks'
+            Sid: CloudFormationDescribe
+            Effect: Allow
+  ClusterExtendedPolicy:
+    Type: 'AWS::IAM::Policy'
+    Properties:
+      Roles:
+        - !Ref ClusterRole
+      PolicyName: ClusterExtendedPolicy
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Sid: s3
+            Effect: Allow
+            Resource: '*'
+            Action:
+              - 's3:GetObject'
+          - Sid: cloudformation
+            Effect: Allow
+            Resource:
+              - !Sub >-
+                arn:aws-cn:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}/*
+              - !Sub >-
+                arn:aws-cn:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/${AWS::StackName}-DefaultCluster-*/*
+              - !Sub >-
+                arn:aws-cn:cloudformation:${AWS::Region}:${AWS::AccountId}:stack/Cluster-*/*
+            Action:
+              - 'cloudformation:DescribeStacks'
+              - 'cloudformation:DescribeStackResource'
+              - 'cloudformation:DescribeStackResources'
+          - Sid: elb
+            Effect: Allow
+            Resource: '*'
+            Action:
+              - 'elasticloadbalancing:RegisterTargets'
+              - 'elasticloadbalancing:RegisterInstancesWithLoadBalancer'
+              - 'elasticloadbalancing:DescribeLoadBalancers'
+              - 'elasticloadbalancing:CreateTargetGroup'
+              - 'elasticloadbalancing:CreateRule'
+              - 'elasticloadbalancing:DescribeRules'
+              - 'elasticloadbalancing:DescribeListeners'
+              - 'elasticloadbalancing:AddTags'
+          - Sid: ec2
+            Effect: Allow
+            Resource: '*'
+            Action:
+              - 'ec2:DescribeVpcs'
+              - 'ec2:DescribeSubnets'
+          - Sid: iam
+            Effect: Allow
+            Resource:
+              - !GetAtt 
+                - ClusterRole
+                - Arn
+            Action:
+              - 'iam:GetRole'
+              - 'iam:PutRolePolicy'
+  ClusterInstanceProfile:
+    Type: 'AWS::IAM::InstanceProfile'
+    Properties:
+      Path: /
+      Roles:
+        - !Ref ClusterRole
+  MasterENI:
+    Type: 'AWS::EC2::NetworkInterface'
+    Properties:
+      Description: Cluster Master Server
+      SubnetId: !Ref PublicSubnet
+      SourceDestCheck: false
+      GroupSet:
+        - !Ref ClusterSecurityGroup
+        - !Ref ClusterAdditionalSG
+  MasterEIP:
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: vpc
+  AssociateEIP:
+    Type: 'AWS::EC2::EIPAssociation'
+    Properties:
+      AllocationId: !GetAtt 
+        - MasterEIP
+        - AllocationId
+      NetworkInterfaceId: !Ref MasterENI
+  MasterServer:
+    Type: 'AWS::EC2::Instance'
+    Properties:
+      LaunchTemplate:
+        LaunchTemplateId: !Ref MasterServerLaunchTemplate
+        Version: !GetAtt 
+          - MasterServerLaunchTemplate
+          - LatestVersionNumber
+  MasterServerLaunchTemplate:
+    Type: 'AWS::EC2::LaunchTemplate'
+    Properties:
+      LaunchTemplateData:
+        InstanceType: !Ref MasterInstanceType
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvdba
+            VirtualName: ephemeral0
+          - DeviceName: /dev/xvdbb
+            VirtualName: ephemeral1
+          - DeviceName: /dev/xvdbc
+            VirtualName: ephemeral2
+          - DeviceName: /dev/xvdbd
+            VirtualName: ephemeral3
+          - DeviceName: /dev/xvdbe
+            VirtualName: ephemeral4
+          - DeviceName: /dev/xvdbf
+            VirtualName: ephemeral5
+          - DeviceName: /dev/xvdbg
+            VirtualName: ephemeral6
+          - DeviceName: /dev/xvdbh
+            VirtualName: ephemeral7
+          - DeviceName: /dev/xvdbi
+            VirtualName: ephemeral8
+          - DeviceName: /dev/xvdbj
+            VirtualName: ephemeral9
+          - DeviceName: /dev/xvdbk
+            VirtualName: ephemeral10
+          - DeviceName: /dev/xvdbl
+            VirtualName: ephemeral11
+          - DeviceName: /dev/xvdbm
+            VirtualName: ephemeral12
+          - DeviceName: /dev/xvdbn
+            VirtualName: ephemeral13
+          - DeviceName: /dev/xvdbo
+            VirtualName: ephemeral14
+          - DeviceName: /dev/xvdbp
+            VirtualName: ephemeral15
+          - DeviceName: /dev/xvdbq
+            VirtualName: ephemeral16
+          - DeviceName: /dev/xvdbr
+            VirtualName: ephemeral17
+          - DeviceName: /dev/xvdbs
+            VirtualName: ephemeral18
+          - DeviceName: /dev/xvdbt
+            VirtualName: ephemeral19
+          - DeviceName: /dev/xvdbu
+            VirtualName: ephemeral20
+          - DeviceName: /dev/xvdbv
+            VirtualName: ephemeral21
+          - DeviceName: /dev/xvdbw
+            VirtualName: ephemeral22
+          - DeviceName: /dev/xvdbx
+            VirtualName: ephemeral23
+          - DeviceName: !FindInMap 
+              - OSFeatures
+              - !Ref BaseOS
+              - RootDevice
+            Ebs:
+              VolumeSize: 25
+              VolumeType: gp2
+        KeyName: !Ref KeyName
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Application
+                Value: !Ref 'AWS::StackName'
+              - Key: Name
+                Value: Master
+              - Key: ClusterName
+                Value: !Ref 'AWS::StackName'
+        NetworkInterfaces:
+          - NetworkInterfaceId: !Ref MasterENI
+            DeviceIndex: 0
+        ImageId: !FindInMap 
+            - AWSRegionOS2AMI
+            - !Ref 'AWS::Region'
+            - !Ref BaseOS
+        IamInstanceProfile:
+          Name: !Ref ClusterInstanceProfile
+  ComputeFleet:
+    Type: 'AWS::AutoScaling::AutoScalingGroup'
+    Properties:
+      MinSize: !Ref MinSize
+      DesiredCapacity: !Ref DesiredSize
+      MaxSize: !Ref MaxSize
+      VPCZoneIdentifier: 
+        - !Ref PrivateSubnet
+      LaunchTemplate:
+        LaunchTemplateId: !Ref ComputeServerLaunchTemplate
+        Version: !GetAtt 
+          - ComputeServerLaunchTemplate
+          - LatestVersionNumber
+      Tags:
+        - Key: Name
+          Value: Compute
+          PropagateAtLaunch: true
+        - Key: ClusterName
+          Value: !Ref 'AWS::StackName'
+          PropagateAtLaunch: true
+      MetricsCollection:
+        - Granularity: 1Minute
+          Metrics:
+            - GroupDesiredCapacity
+            - GroupInServiceInstances
+            - GroupTerminatingInstances
+            - GroupTotalInstances
+  ComputeServerLaunchTemplate:
+    Type: 'AWS::EC2::LaunchTemplate'
+    Properties:
+      LaunchTemplateData:
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            Groups:
+              - !Ref ClusterSecurityGroup
+              - !Ref ClusterAdditionalSG
+        InstanceType: !Ref ComputeInstanceType
+        KeyName: !Ref KeyName
+        IamInstanceProfile:
+          Name: !Ref ClusterInstanceProfile
+        ImageId: !FindInMap 
+            - AWSRegionOS2AMI
+            - !Ref 'AWS::Region'
+            - !Ref BaseOS
+        Monitoring:
+          Enabled: false
+        BlockDeviceMappings:
+          - DeviceName: /dev/xvdba
+            VirtualName: ephemeral0
+          - DeviceName: /dev/xvdbb
+            VirtualName: ephemeral1
+          - DeviceName: /dev/xvdbc
+            VirtualName: ephemeral2
+          - DeviceName: /dev/xvdbd
+            VirtualName: ephemeral3
+          - DeviceName: /dev/xvdbe
+            VirtualName: ephemeral4
+          - DeviceName: /dev/xvdbf
+            VirtualName: ephemeral5
+          - DeviceName: /dev/xvdbg
+            VirtualName: ephemeral6
+          - DeviceName: /dev/xvdbh
+            VirtualName: ephemeral7
+          - DeviceName: /dev/xvdbi
+            VirtualName: ephemeral8
+          - DeviceName: /dev/xvdbj
+            VirtualName: ephemeral9
+          - DeviceName: /dev/xvdbk
+            VirtualName: ephemeral10
+          - DeviceName: /dev/xvdbl
+            VirtualName: ephemeral11
+          - DeviceName: /dev/xvdbm
+            VirtualName: ephemeral12
+          - DeviceName: /dev/xvdbn
+            VirtualName: ephemeral13
+          - DeviceName: /dev/xvdbo
+            VirtualName: ephemeral14
+          - DeviceName: /dev/xvdbp
+            VirtualName: ephemeral15
+          - DeviceName: /dev/xvdbq
+            VirtualName: ephemeral16
+          - DeviceName: /dev/xvdbr
+            VirtualName: ephemeral17
+          - DeviceName: /dev/xvdbs
+            VirtualName: ephemeral18
+          - DeviceName: /dev/xvdbt
+            VirtualName: ephemeral19
+          - DeviceName: /dev/xvdbu
+            VirtualName: ephemeral20
+          - DeviceName: /dev/xvdbv
+            VirtualName: ephemeral21
+          - DeviceName: /dev/xvdbw
+            VirtualName: ephemeral22
+          - DeviceName: /dev/xvdbx
+            VirtualName: ephemeral23
+          - DeviceName: !FindInMap 
+              - OSFeatures
+              - !Ref BaseOS
+              - RootDevice
+            Ebs:
+              VolumeSize: 25
+              VolumeType: gp2
+Outputs:
+  VpcId:
+    Value: !Ref VPC
+  PrivateSubnetId:
+    Value: !Ref PrivateSubnet
+  PublicSubnetId:
+    Value: !Ref PublicSubnet

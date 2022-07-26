@@ -1,0 +1,154 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: A sample VPC template with one Public Subnet and one Private Subnet
+Parameters:
+  AvailabilityZone:
+    Description: The Availability Zone in which you want to create your subnet(s)
+    Type: 'AWS::EC2::AvailabilityZone::Name'
+  VpcCidrBlock:
+    AllowedPattern: '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/(1[6-9]|2[0-9]|3[0-2])$'
+    Description: The CIDR of the VPC
+    Type: String 
+  PrivateSubnetCIDR:
+    AllowedPattern: '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/(1[6-9]|2[0-9]|3[0-2])$'
+    Description: The CIDR of the Private Subnet
+    Type: String
+  PublicSubnetCIDR:
+    AllowedPattern: '\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/(1[6-9]|2[0-9]|3[0-2])$'
+    Description: The CIDR of the Public Subnet
+    Type: String
+Metadata:
+  'AWS::CloudFormation::Interface':
+    ParameterGroups:
+      - Label:
+          default:  AvailabilityZone Configuration
+        Parameters:
+          - AvailabilityZone
+      - Label:
+          default: VPC CIDR Configuration
+        Parameters:
+          - VpcCidrBlock
+      - Label:
+          default: Private Subnet Configuration
+        Parameters:
+          - PrivateSubnetCIDR
+      - Label:
+          default: Public Subnet Configuration
+        Parameters:
+          - PublicSubnetCIDR
+    ParameterLabels:
+      AvailabilityZone:
+        default: Availability Zone
+      VpcCidrBlock:
+        default: VPC CIDR Block
+      PrivateSubnetCIDR:
+        default: Private Subnet CIDR
+      PublicSubnetCIDR:
+        default: Public Subnet CIDR
+Resources:
+  VPC:
+    Type: 'AWS::EC2::VPC'
+    Properties:
+      EnableDnsSupport: 'true'
+      EnableDnsHostnames: 'true'
+      CidrBlock: !Ref VpcCidrBlock
+      Tags:
+        - Key: Name
+          Value: !Sub '${AWS::StackName}-VPC'
+        - Key: Stack
+          Value: !Ref 'AWS::StackId'
+  DefaultRouteDependsOnPublic:
+    Type: 'AWS::EC2::Route'
+    DependsOn: VPCGatewayAttachment
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTablePublic  
+  InternetGateway:
+    Type: 'AWS::EC2::InternetGateway'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: ParallelClusterIG
+        - Key: Stack
+          Value: !Ref 'AWS::StackId'
+  NatEIPPublic:
+    Type: 'AWS::EC2::EIP'
+    Properties:
+      Domain: vpc
+  NatGatewayPublic:
+    Type: 'AWS::EC2::NatGateway'
+    Properties:
+      AllocationId: !GetAtt 
+        - NatEIPPublic
+        - AllocationId
+      SubnetId: !Ref PublicSubnet
+  NatRoutePrivate:
+    Type: 'AWS::EC2::Route'
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId: !Ref NatGatewayPublic
+      RouteTableId: !Ref RouteTablePrivate
+  PrivateSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: !Ref PrivateSubnetCIDR
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: ParallelClusterPrivateSubnet
+        - Key: Stack
+          Value: !Ref 'AWS::StackId'
+      VpcId: !Ref VPC
+  PublicSubnet:
+    Type: 'AWS::EC2::Subnet'
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone
+      CidrBlock: !Ref PublicSubnetCIDR
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: ParallelClusterPublicSubnet
+        - Key: Stack
+          Value: !Ref 'AWS::StackId'
+      VpcId: !Ref VPC
+  RouteAssociationPrivate:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref RouteTablePrivate
+      SubnetId: !Ref PrivateSubnet 
+  RouteAssociationPublic:
+    Type: 'AWS::EC2::SubnetRouteTableAssociation'
+    Properties:
+      RouteTableId: !Ref RouteTablePublic
+      SubnetId: !Ref PublicSubnet
+  RouteTablePrivate:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: ParallelClusterRouteTablePrivate
+        - Key: Stack
+          Value: !Ref 'AWS::StackId'
+      VpcId: !Ref VPC
+  RouteTablePublic:
+    Type: 'AWS::EC2::RouteTable'
+    Properties:
+      Tags:
+        - Key: Name
+          Value: ParallelClusterRouteTablePublic
+        - Key: Stack
+          Value: !Ref 'AWS::StackId'
+      VpcId: !Ref VPC
+  VPCGatewayAttachment:
+    Type: 'AWS::EC2::VPCGatewayAttachment'
+    Properties:
+      InternetGatewayId: !Ref InternetGateway
+      VpcId: !Ref VPC
+Outputs:
+  VpcId:
+    Value: !Ref VPC
+  PrivateSubnetId:
+    Value: !Ref PrivateSubnet
+  PublicSubnetId:
+    Value: !Ref PublicSubnet
